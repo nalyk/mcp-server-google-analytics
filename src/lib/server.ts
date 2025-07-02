@@ -706,6 +706,21 @@ class GoogleAnalyticsServer {
       res.json({ status: 'healthy', timestamp: new Date().toISOString() });
     });
 
+    // OAuth Protected Resource Metadata endpoint (RFC9728)
+    this.app.get('/.well-known/oauth-protected-resource', (req: Request, res: Response) => {
+      if (config.auth.mode === 'oauth') {
+        res.json({
+          resource: config.auth.resourceUri,
+          authorization_servers: [config.auth.domain],
+          scopes_supported: ['read:analytics'],
+          bearer_methods_supported: ['header'],
+          resource_documentation: 'https://github.com/nalyk/mcp-server-google-analytics'
+        });
+      } else {
+        res.status(404).json({ error: 'OAuth mode not enabled' });
+      }
+    });
+
     logger.info('Express server configured with CORS and middleware');
   }
 
@@ -723,8 +738,11 @@ class GoogleAnalyticsServer {
     // Connect MCP server to transport
     await this.server.connect(transport);
 
-    // Setup MCP HTTP endpoints
-    this.app.post('/mcp', async (req: Request, res: Response) => {
+    // Setup authentication middleware for MCP endpoints
+    const authMiddleware = this.setupAuthenticationMiddleware();
+
+    // Setup MCP HTTP endpoints with optional authentication
+    this.app.post('/mcp', authMiddleware as any, async (req: Request, res: Response) => {
       try {
         // Cast req to the expected type for MCP transport
         await transport.handleRequest(req as any, res as any, req.body);
@@ -744,7 +762,7 @@ class GoogleAnalyticsServer {
     });
 
     // Setup SSE endpoint for server-to-client notifications
-    this.app.get('/mcp', async (req: Request, res: Response) => {
+    this.app.get('/mcp', authMiddleware as any, async (req: Request, res: Response) => {
       try {
         // Cast req and res to the expected types for MCP transport
         await transport.handleRequest(req as any, res as any);
@@ -779,6 +797,25 @@ class GoogleAnalyticsServer {
         process.exit(0);
       });
     });
+  }
+
+  /**
+   * Setup authentication middleware based on configuration
+   */
+  private setupAuthenticationMiddleware() {
+    if (this.authConfig.enabled) {
+      if (config.auth.mode === 'jwt' || config.auth.mode === 'oauth') {
+        try {
+          return createAuthMiddlewareFromEnv();
+        } catch (error) {
+          logger.error('Failed to create authentication middleware', { error });
+          throw error;
+        }
+      }
+    }
+    
+    // Return no-op middleware for 'none' mode
+    return (req: any, res: any, next: any) => next();
   }
 }
 

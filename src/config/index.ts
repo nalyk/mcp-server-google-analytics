@@ -27,6 +27,7 @@ export interface Config {
     domain?: string;
     audience?: string;
     requiredResource?: string;
+    resourceUri?: string;
   };
   googleAnalytics: {
     clientEmail: string;
@@ -94,6 +95,7 @@ export function loadConfig(): Config {
       domain: process.env.AUTH0_DOMAIN,
       audience: process.env.AUTH0_AUDIENCE,
       requiredResource: process.env.MCP_SERVER_RESOURCE,
+      resourceUri: process.env.MCP_RESOURCE_URI || `http://${process.env.MCP_HTTP_HOST || '0.0.0.0'}:${process.env.PORT || '3001'}`,
     },
     googleAnalytics: {
       clientEmail: process.env.GOOGLE_CLIENT_EMAIL!,

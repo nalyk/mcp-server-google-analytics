@@ -116,11 +116,17 @@ export function createAuthMiddleware(config: AuthConfig) {
         }
       }
 
-      // Generic authentication error
-      return res.status(401).json({
-        error: 'unauthorized',
-        error_description: 'Authentication required',
-      });
+      // Generic authentication error with WWW-Authenticate header for OAuth mode
+      const authHeader = config.requiredResource 
+        ? `Bearer realm="MCP Server", resource="${config.requiredResource}"`
+        : 'Bearer realm="MCP Server"';
+        
+      return res.status(401)
+        .header('WWW-Authenticate', authHeader)
+        .json({
+          error: 'unauthorized',
+          error_description: 'Authentication required',
+        });
     }
   };
 }
