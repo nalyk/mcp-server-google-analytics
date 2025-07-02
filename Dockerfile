@@ -19,9 +19,6 @@ WORKDIR /app
 # Install specific pnpm version for consistency
 RUN npm install -g pnpm@8.15.6
 
-# Set a public registry mirror to improve network performance and avoid timeouts
-RUN pnpm config set registry https://registry.npmjs.cf/
-
 # Copy package management files
 COPY package.json package-lock.json ./
 
