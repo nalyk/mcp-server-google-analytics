@@ -20,9 +20,12 @@ WORKDIR /app
 RUN npm install -g pnpm@8.15.6
 
 # Copy package management files
-COPY package.json tsconfig.json ./
+COPY package.json package-lock.json ./
 
-# Install all dependencies (auto-generates pnpm-lock.yaml if missing)
+# Import dependencies from package-lock.json to create pnpm-lock.yaml
+RUN pnpm import
+
+# Install all dependencies using the generated lockfile
 RUN pnpm install --frozen-lockfile
 
 # Copy source code
