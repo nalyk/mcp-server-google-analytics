@@ -16,13 +16,13 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Install pnpm globally
-RUN npm install -g pnpm
+# Install specific pnpm version for consistency
+RUN npm install -g pnpm@8.15.6
 
 # Copy package management files
-COPY package.json pnpm-lock.yaml tsconfig.json ./
+COPY package.json tsconfig.json ./
 
-# Install all dependencies (including devDependencies for building)
+# Install all dependencies (auto-generates pnpm-lock.yaml if missing)
 RUN pnpm install --frozen-lockfile
 
 # Copy source code
@@ -57,9 +57,8 @@ COPY --from=builder --chown=mcp-server:nodejs /app/dist ./dist
 COPY --from=builder --chown=mcp-server:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=mcp-server:nodejs /app/package.json ./package.json
 
-# Expose the port (if the application uses one)
-# Note: MCP servers typically don't expose HTTP ports, but keeping for flexibility
-EXPOSE ${PORT:-3001}
+# Port is configured via environment variables and docker-compose.yml
+# No EXPOSE needed - port mapping handled at runtime
 
 # Add health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
