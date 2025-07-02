@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: mcp-server-google-analytics
+    ports:
+      - ${PORT:-3001}:${PORT:-3001}
+    env_file:
+      - .env
+    environment:
+      - PORT=${PORT:-3001}
