@@ -4,8 +4,6 @@ services:
   app:
     build:
       context: .
-      dns:
-        - 8.8.8.8
     container_name: mcp-server-google-analytics
     dns:
       - 8.8.8.8
