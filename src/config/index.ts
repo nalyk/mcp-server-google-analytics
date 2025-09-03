@@ -22,6 +22,8 @@ export interface Config {
       allowedHeaders: string[];
       exposedHeaders: string[];
     };
+    allowedHosts?: string[];
+    dnsRebindingProtection: boolean;
     sessionMode: 'stateful' | 'stateless';
   };
   auth: {
@@ -70,6 +72,12 @@ function parseCorsOrigins(origins?: string): string[] {
   return origins.split(',').map(origin => origin.trim());
 }
 
+function parseCsv(value?: string): string[] | undefined {
+  if (!value) return undefined;
+  const arr = value.split(',').map(v => v.trim()).filter(Boolean);
+  return arr.length ? arr : undefined;
+}
+
 /**
  * Loads and exports the application configuration
  */
@@ -93,6 +101,8 @@ export function loadConfig(): Config {
         allowedHeaders: ['Content-Type', 'Authorization', 'mcp-session-id'],
         exposedHeaders: ['mcp-session-id'],
       },
+      allowedHosts: parseCsv(process.env.MCP_ALLOWED_HOSTS),
+      dnsRebindingProtection: (process.env.MCP_DNS_REBINDING_PROTECTION || 'false').toLowerCase() === 'true',
       sessionMode: (process.env.MCP_HTTP_SESSION_MODE || 'stateless') as 'stateful' | 'stateless',
     },
     auth: {

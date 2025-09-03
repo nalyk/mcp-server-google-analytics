@@ -14,6 +14,10 @@ import {
   ErrorCode,
   ListToolsRequestSchema,
   McpError,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { BetaAnalyticsDataClient } from '@google-analytics/data';
 import { z } from 'zod';
@@ -70,8 +74,20 @@ class GoogleAnalyticsServer {
       },
       {
         capabilities: {
-          tools: {},
+          tools: { listChanged: false },
+          resources: { subscribe: false, listChanged: false },
+          prompts: { listChanged: false },
+          logging: {},
         },
+        instructions:
+          'MCP Google Analytics Server: exposes GA4 analytics via tools. ' +
+          'Authenticate to GA via service account env vars. Tools support date ranges, optional dimensions, and limits. ' +
+          'See resources for server usage and health.',
+        enforceStrictCapabilities: true,
+        debouncedNotificationMethods: [
+          'notifications/tools/list_changed',
+          'notifications/resources/list_changed',
+        ],
       }
     );
 
@@ -110,6 +126,17 @@ class GoogleAnalyticsServer {
     this.app = express();
     this.setupExpress();
     this.setupToolHandlers();
+    this.setupResourceHandlers();
+    this.setupPromptHandlers();
+  }
+
+  /**
+   * Normalize GA4 property identifier to the required resource format
+   * Accepts either a numeric ID (e.g., "123456789") or a full resource ("properties/123456789").
+   */
+  private getPropertyResource(): string {
+    const id = this.propertyId.trim();
+    return id.startsWith('properties/') ? id : `properties/${id}`;
   }
 
   /**
@@ -370,19 +397,39 @@ class GoogleAnalyticsServer {
     });
 
     // Tool call handler
-    this.server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest) => {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest, extra) => {
       const { name, arguments: args } = request.params;
 
       logger.info('Incoming tool request', { toolName: name, args });
+      // Progress: if requested, send a starting progress tick
+      const progressToken = (request.params as any)?._meta?.progressToken;
+      const sendProgress = async (progress: number, total?: number, message?: string) => {
+        if (progressToken) {
+          await extra.sendNotification({
+            method: 'notifications/progress',
+            params: {
+              progressToken,
+              progress,
+              ...(typeof total === 'number' ? { total } : {}),
+              ...(message ? { message } : {}),
+            },
+          } as any);
+        }
+      };
 
       try {
         // Validate authentication before processing any tool calls
         await this.validateAuthentication(request);
+        await sendProgress(0, 100, 'Validated authentication');
 
         switch (name) {
           case 'get_page_views': {
             const validatedArgs = validateInput(GetPageViewsSchema, args) as GetPageViewsInput;
-            const result = await this.handlePageViews(validatedArgs);
+            await sendProgress(20, 100, 'Fetching page views');
+            if (extra.signal.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
+            const result = await this.handlePageViews(validatedArgs, extra.signal);
+            await sendProgress(100, 100, 'Done');
+            await this.server.sendLoggingMessage({ level: 'info', data: { tool: name, status: 'ok' } } as any, extra.sessionId);
             return {
               content: [
                 {
@@ -395,7 +442,11 @@ class GoogleAnalyticsServer {
 
           case 'get_active_users': {
             const validatedArgs = validateInput(GetActiveUsersSchema, args) as GetActiveUsersInput;
-            const result = await this.handleActiveUsers(validatedArgs);
+            await sendProgress(20, 100, 'Fetching active users');
+            if (extra.signal.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
+            const result = await this.handleActiveUsers(validatedArgs, extra.signal);
+            await sendProgress(100, 100, 'Done');
+            await this.server.sendLoggingMessage({ level: 'info', data: { tool: name, status: 'ok' } } as any, extra.sessionId);
             return {
               content: [
                 {
@@ -408,7 +459,11 @@ class GoogleAnalyticsServer {
 
           case 'get_events': {
             const validatedArgs = validateInput(GetEventsSchema, args) as GetEventsInput;
-            const result = await this.handleEvents(validatedArgs);
+            await sendProgress(20, 100, 'Fetching events');
+            if (extra.signal.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
+            const result = await this.handleEvents(validatedArgs, extra.signal);
+            await sendProgress(100, 100, 'Done');
+            await this.server.sendLoggingMessage({ level: 'info', data: { tool: name, status: 'ok' } } as any, extra.sessionId);
             return {
               content: [
                 {
@@ -421,7 +476,11 @@ class GoogleAnalyticsServer {
 
           case 'get_user_behavior': {
             const validatedArgs = validateInput(GetUserBehaviorSchema, args) as GetUserBehaviorInput;
-            const result = await this.handleUserBehavior(validatedArgs);
+            await sendProgress(20, 100, 'Fetching user behavior');
+            if (extra.signal.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
+            const result = await this.handleUserBehavior(validatedArgs, extra.signal);
+            await sendProgress(100, 100, 'Done');
+            await this.server.sendLoggingMessage({ level: 'info', data: { tool: name, status: 'ok' } } as any, extra.sessionId);
             return {
               content: [
                 {
@@ -454,6 +513,7 @@ class GoogleAnalyticsServer {
 
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         logger.error('Tool execution failed', { toolName: name, error: errorMessage });
+        await this.server.sendLoggingMessage({ level: 'error', data: { tool: name, error: errorMessage } } as any, undefined);
         throw new McpError(
           ErrorCode.InternalError,
           `Tool execution failed: ${errorMessage}`
@@ -463,14 +523,180 @@ class GoogleAnalyticsServer {
   }
 
   /**
+   * Setup basic resources as per MCP resources API
+   */
+  private setupResourceHandlers(): void {
+    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
+      return {
+        resources: [
+          {
+            uri: 'mcp-ga://server/health',
+            name: 'Server Health',
+            mimeType: 'application/json',
+          },
+          {
+            uri: 'mcp-ga://server/instructions',
+            name: 'Usage Instructions',
+            mimeType: 'text/markdown',
+          },
+          {
+            uri: 'mcp-ga://ga/property',
+            name: 'GA Property',
+            mimeType: 'text/plain',
+          },
+        ],
+      };
+    });
+
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request: any) => {
+      const { uri } = request.params;
+      switch (uri) {
+        case 'mcp-ga://server/health':
+          return {
+            contents: [
+              {
+                uri,
+                mimeType: 'application/json',
+                text: JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }),
+              },
+            ],
+          };
+        case 'mcp-ga://server/instructions':
+          return {
+            contents: [
+              {
+                uri,
+                mimeType: 'text/markdown',
+                text: '# MCP Google Analytics\n\nUse tools to query GA4 data. Configure GA credentials via env. Optional JWT/OAuth for HTTP transport. See README for details.',
+              },
+            ],
+          };
+        case 'mcp-ga://ga/property':
+          return {
+            contents: [
+              {
+                uri,
+                mimeType: 'text/plain',
+                text: this.getPropertyResource(),
+              },
+            ],
+          };
+        default:
+          throw new McpError(ErrorCode.InvalidParams, `Unknown resource: ${uri}`);
+      }
+    });
+    // Resource templates to guide clients
+    const { ListResourceTemplatesRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
+    this.server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
+      return {
+        templates: [
+          {
+            name: 'report',
+            uriTemplate: 'mcp-ga://report?startDate={YYYY-MM-DD}&endDate={YYYY-MM-DD}&dimensions={csv}&limit={n}',
+            description: 'Generic GA report template; use tools to actually fetch data',
+            mimeType: 'application/json',
+          },
+        ],
+      } as any;
+    });
+  }
+
+  /**
+   * Setup prompt handlers to guide clients/LLMs on common GA queries
+   */
+  private setupPromptHandlers(): void {
+    const prompts = [
+      {
+        name: 'top_pages',
+        description: 'Top pages by views in a date range',
+        arguments: [
+          { name: 'startDate', description: 'YYYY-MM-DD', required: true },
+          { name: 'endDate', description: 'YYYY-MM-DD', required: true },
+          { name: 'limit', description: 'Number of rows', required: false },
+        ],
+        template: (args: any) =>
+          `Use tool get_page_views with dimensions ["pagePath"]. Parameters: ${JSON.stringify({
+            startDate: args.startDate,
+            endDate: args.endDate,
+            dimensions: ['pagePath'],
+            limit: args.limit ?? 10,
+          })}`,
+      },
+      {
+        name: 'active_users_by_country',
+        description: 'Active users by country in a date range',
+        arguments: [
+          { name: 'startDate', description: 'YYYY-MM-DD', required: true },
+          { name: 'endDate', description: 'YYYY-MM-DD', required: true },
+          { name: 'limit', description: 'Number of rows', required: false },
+        ],
+        template: (args: any) =>
+          `Use tool get_active_users with dimensions ["country"]. Parameters: ${JSON.stringify({
+            startDate: args.startDate,
+            endDate: args.endDate,
+            dimensions: ['country'],
+            limit: args.limit ?? 10,
+          })}`,
+      },
+      {
+        name: 'events_by_name',
+        description: 'Event counts filtered by eventName',
+        arguments: [
+          { name: 'startDate', description: 'YYYY-MM-DD', required: true },
+          { name: 'endDate', description: 'YYYY-MM-DD', required: true },
+          { name: 'eventName', description: 'Exact event name', required: true },
+          { name: 'limit', description: 'Number of rows', required: false },
+        ],
+        template: (args: any) =>
+          `Use tool get_events with dimensions ["eventName"]. Parameters: ${JSON.stringify({
+            startDate: args.startDate,
+            endDate: args.endDate,
+            eventName: args.eventName,
+            dimensions: ['eventName'],
+            limit: args.limit ?? 10,
+          })}`,
+      },
+    ];
+
+    this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+      return {
+        prompts: prompts.map(p => ({
+          name: p.name,
+          description: p.description,
+          arguments: p.arguments,
+        })),
+      } as any;
+    });
+
+    this.server.setRequestHandler(GetPromptRequestSchema, async (request: any) => {
+      const { name, arguments: args } = request.params;
+      const prompt = prompts.find(p => p.name === name);
+      if (!prompt) {
+        throw new McpError(ErrorCode.InvalidParams, `Unknown prompt: ${name}`);
+      }
+      const text = prompt.template(args || {});
+      return {
+        description: prompt.description,
+        messages: [
+          {
+            role: 'user',
+            content: { type: 'text', text },
+          },
+        ],
+      } as any;
+    });
+  }
+
+  /**
    * Handle page views data retrieval
    */
-  private async handlePageViews(args: GetPageViewsInput): Promise<any> {
+  private async handlePageViews(args: GetPageViewsInput, signal?: AbortSignal): Promise<any> {
     try {
+      if (signal?.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
       const dimensions = args.dimensions;
       
       const request = {
-        property: `properties/${this.propertyId}`,
+        property: this.getPropertyResource(),
         dateRanges: [
           {
             startDate: args.startDate,
@@ -493,7 +719,8 @@ class GoogleAnalyticsServer {
         limit: args.limit,
       };
 
-      const [response] = await this.analyticsClient.runReport(request);
+      if (signal?.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
+      const [response] = await this.analyticsClient.runReport(request as any);
       const formattedResponse = formatGAResponse(response);
       
       return createSuccessResponse(formattedResponse, {
@@ -517,10 +744,11 @@ class GoogleAnalyticsServer {
   /**
    * Handle active users data retrieval
    */
-  private async handleActiveUsers(args: GetActiveUsersInput): Promise<any> {
+  private async handleActiveUsers(args: GetActiveUsersInput, signal?: AbortSignal): Promise<any> {
     try {
+      if (signal?.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
       const request = {
-        property: `properties/${this.propertyId}`,
+        property: this.getPropertyResource(),
         dateRanges: [
           {
             startDate: args.startDate,
@@ -542,7 +770,8 @@ class GoogleAnalyticsServer {
         limit: args.limit,
       };
 
-      const [response] = await this.analyticsClient.runReport(request);
+      if (signal?.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
+      const [response] = await this.analyticsClient.runReport(request as any);
       const formattedResponse = formatGAResponse(response);
       
       return createSuccessResponse(formattedResponse, {
@@ -566,10 +795,11 @@ class GoogleAnalyticsServer {
   /**
    * Handle events data retrieval
    */
-  private async handleEvents(args: GetEventsInput): Promise<any> {
+  private async handleEvents(args: GetEventsInput, signal?: AbortSignal): Promise<any> {
     try {
+      if (signal?.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
       const request = {
-        property: `properties/${this.propertyId}`,
+        property: this.getPropertyResource(),
         dateRanges: [
           {
             startDate: args.startDate,
@@ -603,7 +833,8 @@ class GoogleAnalyticsServer {
         };
       }
 
-      const [response] = await this.analyticsClient.runReport(request);
+      if (signal?.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
+      const [response] = await this.analyticsClient.runReport(request as any);
       const formattedResponse = formatGAResponse(response);
       
       return createSuccessResponse(formattedResponse, {
@@ -628,10 +859,11 @@ class GoogleAnalyticsServer {
   /**
    * Handle user behavior data retrieval
    */
-  private async handleUserBehavior(args: GetUserBehaviorInput): Promise<any> {
+  private async handleUserBehavior(args: GetUserBehaviorInput, signal?: AbortSignal): Promise<any> {
     try {
+      if (signal?.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
       const request = {
-        property: `properties/${this.propertyId}`,
+        property: this.getPropertyResource(),
         dateRanges: [
           {
             startDate: args.startDate,
@@ -655,7 +887,8 @@ class GoogleAnalyticsServer {
         limit: args.limit,
       };
 
-      const [response] = await this.analyticsClient.runReport(request);
+      if (signal?.aborted) throw new McpError(ErrorCode.InvalidRequest, 'Request was cancelled');
+      const [response] = await this.analyticsClient.runReport(request as any);
       const formattedResponse = formatGAResponse(response);
       
       return createSuccessResponse(formattedResponse, {
@@ -744,6 +977,9 @@ class GoogleAnalyticsServer {
     const isStateless = config.http.sessionMode === 'stateless';
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: isStateless ? undefined : () => Math.random().toString(36).substring(2, 15),
+      allowedHosts: config.http.allowedHosts,
+      allowedOrigins: config.http.cors.origins && config.http.cors.origins[0] !== '*' ? config.http.cors.origins : undefined,
+      enableDnsRebindingProtection: config.http.dnsRebindingProtection,
     });
     await this.server.connect(transport);
 

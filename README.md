@@ -16,6 +16,8 @@ A production-ready **Model Context Protocol (MCP) server** that provides secure,
 - **Docker Ready**: Production-optimized containerization with multi-stage builds
 - **Type Safety**: Full TypeScript implementation with Zod schema validation
 - **Modular Architecture**: Clean, maintainable codebase with clear separation of concerns
+- **Prompts & Resources**: Exposes `prompts/list` + `prompts/get` and `resources/*` for better LLM UX
+- **Progress & Cancellation**: Sends progress notifications and honors request cancellation
 
 ## Architecture
 
@@ -243,7 +245,9 @@ MCP_TRANSPORT=stdio
 MCP_HTTP_SESSION_MODE=stateless
 
 # Google Analytics Configuration (from Google Cloud setup)
-GA_PROPERTY_ID=properties/123456789
+# GA_PROPERTY_ID can be either just the numeric id (e.g. 123456789)
+# or the full resource string (properties/123456789). The server normalizes it.
+GA_PROPERTY_ID=123456789
 GOOGLE_PROJECT_ID=your-google-cloud-project-id
 GOOGLE_CLIENT_EMAIL=your-service-account@project.iam.gserviceaccount.com
 GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
@@ -277,6 +281,14 @@ With HTTP transport enabled, the server is available at `http://localhost:3001` 
 - **MCP Endpoint**: `POST /mcp` (JSON-RPC 2.0)
 - **MCP SSE**: `GET /mcp` (Server-Sent Events)
 - **OAuth Metadata**: `GET /.well-known/oauth-protected-resource` (OAuth mode only)
+
+## MCP Capabilities Implemented
+
+- `tools`: lists four GA tools with schema validation
+- `resources`: basic resources (`mcp-ga://server/health`, `mcp-ga://server/instructions`, `mcp-ga://ga/property`) and templates
+- `prompts`: helpful GA prompt templates (`top_pages`, `active_users_by_country`, `events_by_name`)
+- `logging`: sends server log notifications; client can request log level
+- `progress`: tools emit progress notifications when requested
 
 ## Docker Deployment
 

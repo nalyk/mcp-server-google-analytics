@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@google-analytics/data": "^4.0.0",
-    "@modelcontextprotocol/sdk": "^1.12.3",
+    "@modelcontextprotocol/sdk": "^1.17.5",
     "dotenv": "^17.0.1",
     "express": "^4.17.1",
     "express-oauth2-jwt-bearer": "^1.6.1",
