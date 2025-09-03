@@ -237,6 +237,10 @@ MCP_AUTH_MODE=none
 MCP_HTTP_HOST=0.0.0.0
 MCP_CORS_ORIGINS=*
 MCP_RESOURCE_URI=https://mcp.yourdomain.com
+# Transport: stdio (default for MCP clients) or http
+MCP_TRANSPORT=stdio
+# HTTP session mode (http only): stateless accepts repeated initialize; stateful enforces session IDs
+MCP_HTTP_SESSION_MODE=stateless
 
 # Google Analytics Configuration (from Google Cloud setup)
 GA_PROPERTY_ID=properties/123456789
@@ -248,6 +252,8 @@ GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\
 AUTH0_DOMAIN=your-domain.auth0.com
 AUTH0_AUDIENCE=your-api-audience
 MCP_SERVER_RESOURCE=required-resource-indicator
+# Optional if not using AUTH0_ISSUER_URL explicitly; derived from domain otherwise
+# AUTH0_ISSUER_URL=https://your-domain.auth0.com
 ```
 
 ### 4. Development
@@ -263,7 +269,9 @@ npm run build
 npm start
 ```
 
-The server will be available at `http://localhost:3001` with the following endpoints:
+When running with `MCP_TRANSPORT=stdio` (default), the server communicates over stdio for MCP clients (e.g., Claude Desktop). For HTTP transport, set `MCP_TRANSPORT=http`.
+
+With HTTP transport enabled, the server is available at `http://localhost:3001` with the following endpoints:
 
 - **Health Check**: `GET /health`
 - **MCP Endpoint**: `POST /mcp` (JSON-RPC 2.0)
@@ -376,7 +384,8 @@ Add this configuration to your Claude Desktop settings:
         "GOOGLE_CLIENT_EMAIL": "your-service-account@project.iam.gserviceaccount.com",
         "GOOGLE_PRIVATE_KEY": "your-private-key",
         "GA_PROPERTY_ID": "your-ga4-property-id",
-        "GOOGLE_PROJECT_ID": "your-google-cloud-project-id"
+        "GOOGLE_PROJECT_ID": "your-google-cloud-project-id",
+        "MCP_TRANSPORT": "stdio"
       }
     }
   }

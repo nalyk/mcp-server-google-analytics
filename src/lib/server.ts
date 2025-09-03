@@ -729,13 +729,22 @@ class GoogleAnalyticsServer {
    */
   async start(): Promise<void> {
     logger.info('Starting Google Analytics MCP server');
-    
-    // Create HTTP transport for MCP
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => Math.random().toString(36).substring(2, 15),
-    });
 
-    // Connect MCP server to transport
+    if (config.transport === 'stdio') {
+      // STDIO transport mode for typical MCP clients (default)
+      logger.info('Using STDIO transport (default)');
+      const stdio = new StdioServerTransport();
+      await this.server.connect(stdio);
+      // In stdio mode we do not start the HTTP server
+      return;
+    }
+
+    // HTTP transport mode
+    logger.info('Using HTTP transport');
+    const isStateless = config.http.sessionMode === 'stateless';
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: isStateless ? undefined : () => Math.random().toString(36).substring(2, 15),
+    });
     await this.server.connect(transport);
 
     // Setup authentication middleware for MCP endpoints
@@ -744,17 +753,13 @@ class GoogleAnalyticsServer {
     // Setup MCP HTTP endpoints with optional authentication
     this.app.post('/mcp', authMiddleware as any, async (req: Request, res: Response) => {
       try {
-        // Cast req to the expected type for MCP transport
         await transport.handleRequest(req as any, res as any, req.body);
       } catch (error) {
         logger.error('MCP request handling error', { error });
         if (!res.headersSent) {
           res.status(500).json({
             jsonrpc: '2.0',
-            error: {
-              code: -32603,
-              message: 'Internal server error',
-            },
+            error: { code: -32603, message: 'Internal server error' },
             id: null,
           });
         }
@@ -764,7 +769,6 @@ class GoogleAnalyticsServer {
     // Setup SSE endpoint for server-to-client notifications
     this.app.get('/mcp', authMiddleware as any, async (req: Request, res: Response) => {
       try {
-        // Cast req and res to the expected types for MCP transport
         await transport.handleRequest(req as any, res as any);
       } catch (error) {
         logger.error('MCP SSE handling error', { error });

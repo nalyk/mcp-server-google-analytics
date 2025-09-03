@@ -13,6 +13,7 @@ export interface Config {
     name: string;
     version: string;
   };
+  transport: 'stdio' | 'http';
   http: {
     port: number;
     host: string;
@@ -21,6 +22,7 @@ export interface Config {
       allowedHeaders: string[];
       exposedHeaders: string[];
     };
+    sessionMode: 'stateful' | 'stateless';
   };
   auth: {
     mode: 'none' | 'jwt' | 'oauth';
@@ -75,12 +77,14 @@ export function loadConfig(): Config {
   validateRequiredEnvVars();
 
   const authMode = (process.env.MCP_AUTH_MODE || 'none') as 'none' | 'jwt' | 'oauth';
+  const transport = (process.env.MCP_TRANSPORT || 'stdio') as 'stdio' | 'http';
 
   return {
     server: {
       name: process.env.MCP_SERVER_NAME || 'mcp-server-google-analytics',
       version: process.env.MCP_SERVER_VERSION || '2.0.0',
     },
+    transport,
     http: {
       port: parseInt(process.env.PORT || '3000', 10),
       host: process.env.MCP_HTTP_HOST || '0.0.0.0',
@@ -89,6 +93,7 @@ export function loadConfig(): Config {
         allowedHeaders: ['Content-Type', 'Authorization', 'mcp-session-id'],
         exposedHeaders: ['mcp-session-id'],
       },
+      sessionMode: (process.env.MCP_HTTP_SESSION_MODE || 'stateless') as 'stateful' | 'stateless',
     },
     auth: {
       mode: authMode,

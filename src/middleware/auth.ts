@@ -43,9 +43,15 @@ export function createAuthMiddleware(config: AuthConfig) {
   }
 
   // Create the base JWT validation middleware
+  const issuerBaseURL = process.env.AUTH0_ISSUER_URL || (config.domain ? `https://${config.domain}` : undefined);
+
+  if (!issuerBaseURL) {
+    throw new Error('Missing issuer configuration: set AUTH0_ISSUER_URL or AUTH0_DOMAIN');
+  }
+
   const jwtCheck = auth({
-    audience: process.env.AUTH0_AUDIENCE,
-    issuerBaseURL: process.env.AUTH0_ISSUER_URL,
+    audience: config.audience,
+    issuerBaseURL,
     tokenSigningAlg: 'RS256',
     authRequired: true,
   });
